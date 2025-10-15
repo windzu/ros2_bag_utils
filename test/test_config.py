@@ -3,12 +3,12 @@ from typing import Dict
 
 import pytest
 
-from ros2_bag_utils.rewrite_frame_id import (
+from ros2_bag_utils.common import (
     ConfigError,
-    build_effective_config,
     parse_topic_map_arguments,
     resolve_output_uri,
 )
+from ros2_bag_utils.rewrite_frame_id import build_effective_config
 
 
 def test_parse_topic_map_arguments_success():
@@ -23,11 +23,11 @@ def test_parse_topic_map_arguments_invalid_format():
 
 def test_resolve_output_uri_generates_unique_path(tmp_path: Path):
     input_uri = tmp_path / 'bag1'
-    candidate1 = resolve_output_uri(input_uri, None)
+    candidate1 = resolve_output_uri(input_uri, None, suffix='_frameid_fix')
     assert candidate1 == tmp_path / 'bag1_frameid_fix'
 
     candidate1.mkdir()
-    candidate2 = resolve_output_uri(input_uri, None)
+    candidate2 = resolve_output_uri(input_uri, None, suffix='_frameid_fix')
     assert candidate2 == tmp_path / 'bag1_frameid_fix_1'
 
 
@@ -36,7 +36,7 @@ def test_resolve_output_uri_strips_known_suffix(tmp_path: Path):
     input_dir.mkdir()
     input_uri = input_dir / 'session_0.db3'
 
-    candidate = resolve_output_uri(input_uri, None)
+    candidate = resolve_output_uri(input_uri, None, suffix='_frameid_fix')
     assert candidate == input_dir / 'session_0_frameid_fix'
 
 

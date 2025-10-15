@@ -3,7 +3,7 @@
     <name>ros2_bag_utils</name>
     <version>0.1.0</version>
     <description>Utilities for manipulating ROS 2 bag files, including frame_id rewriting.</description>
-    <maintainer email="windzu@example.com">Windzu</maintainer>
+    <maintainer email="windzu1@gmail.com">Windzu</maintainer>
     <license>Apache-2.0</license>
 
     <buildtool_depend>ament_python</buildtool_depend>

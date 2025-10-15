@@ -1,0 +1,6 @@
+# Example configuration for renaming topics inside a rosbag2 recording
+input_bag: /path/to/original_bag
+# output_bag: /path/to/output_bag  # Optional; auto suffix will be used if omitted
+mappings:
+  /old/topic: /new/topic
+  /another/old: /another/new
