@@ -1,0 +1,5 @@
+*.pyc
+
+# ignore config folder but keep which end with .example.yaml
+config/*.yaml
+!config/*.example.yaml
