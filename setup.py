@@ -14,6 +14,7 @@ setup(
             [
                 'config/rewrite_frame_id.example.yaml',
                 'config/rename_topic.example.yaml',
+                'config/write_tf_static.example.yaml',
             ],
         ),
         (
@@ -21,6 +22,7 @@ setup(
             [
                 'launch/rewrite_frame_id.launch.py',
                 'launch/rename_topic.launch.py',
+                'launch/write_tf_static.launch.py',
             ],
         ),
     ],
@@ -35,6 +37,7 @@ setup(
         'console_scripts': [
             'rewrite_frame_id = ros2_bag_utils.rewrite_frame_id:main',
             'rename_topic = ros2_bag_utils.rename_topic:main',
+            'write_tf_static = ros2_bag_utils.write_tf_static:main',
         ],
     },
 )

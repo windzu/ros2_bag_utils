@@ -1,0 +1,19 @@
+# Example configuration for writing tf_static transforms to rosbag2
+input_bag: /path/to/original_bag
+# output_bag: /path/to/output_bag  # Optional; auto suffix will be used if omitted
+
+lidars:
+  lidar0:
+    topic: "/sensing/lidar/lidar0/pointcloud_raw"
+    extrinsics: "/absolute/path/to/lidar0_extrinsics.yaml"
+  lidar1:
+    topic: "/sensing/lidar/lidar1/pointcloud_raw"
+    extrinsics: "/absolute/path/to/lidar1_extrinsics.yaml"
+
+cameras:
+  cam0:
+    topic: "/sensing/camera/cam0/image_ptr"
+    extrinsics: "/absolute/path/to/cam0_extrinsics.yaml"
+  cam1:
+    topic: "/sensing/camera/cam1/image_ptr"
+    extrinsics: "/absolute/path/to/cam1_extrinsics.yaml"

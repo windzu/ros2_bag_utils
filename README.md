@@ -1,13 +1,12 @@
 # ros2_bag_utils
 
-提供针对 ROS 2 bag 的实用工具，目前包含以下能力：
-
-* `rewrite_frame_id`：批量修改消息头的 `frame_id`
-* `rename_topic`：将指定 topic 重命名为新的 topic
+提供针对 ROS 2 bag 的实用工具，包含 frame_id 重写、topic 重命名、tf_static 写入等功能。
 
 ## 功能简介
 
-* **rewrite_frame_id**：根据配置，将已录制 rosbag2 中指定 topic 的 `header.frame_id` 批量替换，并生成新的 bag
+* **rewrite_frame_id**：根据配置，将已录制 rosbag2 中指定 topic 的 `header.frame_id` 批量替换，并生成新的 bag。
+* **rename_topic**：根据配置，将已录制 rosbag2 中的 topic 名称进行重命名，并生成新的 bag。
+* **write_tf_static**：根据外参配置文件，向 rosbag2 中写入 tf_static 变换信息。
 
 ## 安装与构建
 
@@ -97,6 +96,68 @@ ros2 launch ros2_bag_utils rename_topic.launch.py \
 * 若旧 topic 不存在或无消息，将直接报错终止。
 * 若新 topic 已存在于原 bag 或多个旧 topic 指向同一新 topic，同样报错。
 * 输出 bag 使用与输入相同的 storage/serialization 插件并写入新目录，metadata 中的 topic 名称会同步更新。
+
+## write_tf_static
+
+### 配置文件格式（write_tf_static）
+
+示例：`config/write_tf_static.example.yaml`
+
+```yaml
+input_bag: /path/to/original_bag
+output_bag: /path/to/output_bag  # 可选，缺省时自动追加后缀
+
+lidars:  # 可选，存在则处理
+  lidar0:
+    topic: "/sensing/lidar/lidar0/pointcloud_raw"
+    extrinsics: "/absolute/path/to/lidar0_extrinsics.yaml"
+  lidar1:
+    topic: "/sensing/lidar/lidar1/pointcloud_raw"
+    extrinsics: "/absolute/path/to/lidar1_extrinsics.yaml"
+
+cameras:  # 可选，存在则处理
+  cam0:
+    topic: "/sensing/camera/cam0/image_ptr"
+    extrinsics: "/absolute/path/to/cam0_extrinsics.yaml"
+```
+
+外参文件格式：
+
+```yaml
+parent_frame: base_link
+child_frame: lidar_lidar0
+transform:
+  translation:
+    x: 1.250
+    y: 0.000
+    z: 1.600
+  rotation_quaternion:
+    x: 0.000
+    y: 0.000
+    z: 0.000
+    w: 1.000
+```
+
+### 命令行使用（write_tf_static）
+
+```bash
+ros2 run ros2_bag_utils write_tf_static --config /path/to/config.yaml
+```
+
+### Launch 调用（write_tf_static）
+
+```bash
+ros2 launch ros2_bag_utils write_tf_static.launch.py \
+  config_file:=/path/to/config.yaml \
+  input_bag:=/override/input/bag
+```
+
+### 行为规范（write_tf_static）
+
+* 外参文件不存在或格式错误时发出警告并跳过该设备，不会终止程序。
+* 检查 frame 名称是否符合 ROS 规范，不规范时跳过。
+* 若原 bag 已存在 `/tf_static` topic，会发出警告并合并变换。
+* 使用原 bag 第一条消息的时间戳作为 tf_static 的时间戳。
 
 ## 测试
 
