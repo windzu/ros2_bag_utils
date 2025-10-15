@@ -15,6 +15,7 @@ setup(
                 'config/rewrite_frame_id.example.yaml',
                 'config/rename_topic.example.yaml',
                 'config/write_tf_static.example.yaml',
+                'config/filter_pointcloud_xyzi.example.yaml',
             ],
         ),
         (
@@ -23,10 +24,11 @@ setup(
                 'launch/rewrite_frame_id.launch.py',
                 'launch/rename_topic.launch.py',
                 'launch/write_tf_static.launch.py',
+                'launch/filter_pointcloud_xyzi.launch.py',
             ],
         ),
     ],
-    install_requires=['setuptools'],
+    install_requires=['setuptools', 'numpy'],
     zip_safe=True,
     maintainer='Windzu',
     maintainer_email='windzu@example.com',
@@ -38,6 +40,7 @@ setup(
             'rewrite_frame_id = ros2_bag_utils.rewrite_frame_id:main',
             'rename_topic = ros2_bag_utils.rename_topic:main',
             'write_tf_static = ros2_bag_utils.write_tf_static:main',
+            'filter_pointcloud_xyzi = ros2_bag_utils.filter_pointcloud_xyzi:main',
         ],
     },
 )

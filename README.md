@@ -7,6 +7,7 @@
 * **rewrite_frame_id**：根据配置，将已录制 rosbag2 中指定 topic 的 `header.frame_id` 批量替换，并生成新的 bag。
 * **rename_topic**：根据配置，将已录制 rosbag2 中的 topic 名称进行重命名，并生成新的 bag。
 * **write_tf_static**：根据外参配置文件，向 rosbag2 中写入 tf_static 变换信息。
+* **filter_pointcloud_xyzi**：将指定 PointCloud2 topic 的点云字段裁剪为常见的 `x/y/z/intensity` 四个字段。
 
 ## 安装与构建
 
@@ -158,6 +159,47 @@ ros2 launch ros2_bag_utils write_tf_static.launch.py \
 * 检查 frame 名称是否符合 ROS 规范，不规范时跳过。
 * 若原 bag 已存在 `/tf_static` topic，会发出警告并合并变换。
 * 使用原 bag 第一条消息的时间戳作为 tf_static 的时间戳。
+
+## filter_pointcloud_xyzi
+
+### 配置文件格式（filter_pointcloud_xyzi）
+
+示例：`config/filter_pointcloud_xyzi.example.yaml`
+
+```yaml
+input_bag: /path/to/original_bag
+output_bag: /path/to/output_bag  # 可选，缺省时自动追加后缀
+topics:
+  - /sensing/lidar/front/pointcloud_raw
+  - /sensing/lidar/rear/pointcloud_raw
+```
+
+### 命令行使用（filter_pointcloud_xyzi）
+
+```bash
+ros2 run ros2_bag_utils filter_pointcloud_xyzi --config /path/to/config.yaml
+```
+
+命令行参数可覆盖配置文件：
+
+* `--input-bag`：输入 bag 目录
+* `--output-bag`：输出 bag 目录（可选）
+* `--topic /foo/points`：可重复指定，覆盖原配置
+
+### Launch 调用（filter_pointcloud_xyzi）
+
+```bash
+ros2 launch ros2_bag_utils filter_pointcloud_xyzi.launch.py \
+  config_file:=/path/to/config.yaml \
+  input_bag:=/override/input/bag \
+  topics:="/topic_a;/topic_b"
+```
+
+### 行为规范（filter_pointcloud_xyzi）
+
+* 仅当目标 topic 的所有消息同时包含 `x`、`y`、`z`、`intensity` 且类型为 `float32` 时会执行裁剪。
+* 如任意目标 topic 的任意消息缺失上述字段或字段类型不符合要求，将立即报错并终止。
+* 输出 bag 与输入 bag 使用相同的 storage/serialization 插件，并写入新的目录，目标 topic 的消息仅保留 `xyzi` 字段。
 
 ## 测试
 

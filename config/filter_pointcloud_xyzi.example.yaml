@@ -1,0 +1,5 @@
+input_bag: /path/to/original_bag
+output_bag: /path/to/output_bag # 可选，缺省时自动追加后缀
+topics:
+  - /sensing/lidar/front/pointcloud_raw
+  - /sensing/lidar/rear/pointcloud_raw
