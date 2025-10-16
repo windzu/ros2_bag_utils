@@ -55,6 +55,8 @@ ros2 launch ros2_bag_utils rewrite_frame_id.launch.py \
 
 * 如配置中的 topic 不存在或没有消息，将直接报错退出。
 * 如消息缺少 `header.frame_id` 字段，同样报错。
+* 如果 bag 中存在 `/tf_static`，且变换中的 parent/child frame 命中被替换的旧 frame，会自动同步改写，保持 tf 树一致。
+* 当检测到同一 topic 的消息使用不同的 `frame_id`，或同一旧 frame 被要求映射到多个新 frame 时会报错提示。
 * 输出 bag 与输入 bag 采用相同的 storage/serialization 插件，并保存到新的目录中。
 
 ## rename_topic
