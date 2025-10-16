@@ -5,6 +5,7 @@
 ## 功能简介
 
 * **rewrite_frame_id**：根据配置，将已录制 rosbag2 中指定 topic 的 `header.frame_id` 批量替换，并生成新的 bag。
+* **rewrite_tf_static_frame_id**：对 `/tf_static` topic 中的 frame 名称进行批量改写，并生成新的 bag。
 * **rename_topic**：根据配置，将已录制 rosbag2 中的 topic 名称进行重命名，并生成新的 bag。
 * **write_tf_static**：根据外参配置文件，向 rosbag2 中写入 tf_static 变换信息。
 * **filter_pointcloud_xyzi**：将指定 PointCloud2 topic 的点云字段裁剪为常见的 `x/y/z/intensity` 四个字段。
@@ -58,6 +59,48 @@ ros2 launch ros2_bag_utils rewrite_frame_id.launch.py \
 * 如果 bag 中存在 `/tf_static`，且变换中的 parent/child frame 命中被替换的旧 frame，会自动同步改写，保持 tf 树一致。
 * 当检测到同一 topic 的消息使用不同的 `frame_id`，或同一旧 frame 被要求映射到多个新 frame 时会报错提示。
 * 输出 bag 与输入 bag 采用相同的 storage/serialization 插件，并保存到新的目录中。
+
+## rewrite_tf_static_frame_id
+
+### 配置文件格式（rewrite_tf_static_frame_id）
+
+示例：`config/rewrite_tf_static_frame_id.example.yaml`
+
+```yaml
+input_bag: /path/to/original_bag
+output_bag: /path/to/output_bag  # 可选，缺省时自动追加后缀
+frames:
+  old_frame_a: new_frame_a
+  old_frame_b: new_frame_b
+```
+
+### 命令行使用（rewrite_tf_static_frame_id）
+
+```bash
+ros2 run ros2_bag_utils rewrite_tf_static_frame_id --config /path/to/config.yaml
+```
+
+命令行参数可覆盖配置文件：
+
+* `--input-bag`：输入 bag 目录
+* `--output-bag`：输出 bag 目录（可选）
+* `--frame-map old:=new`：可重复指定，覆盖原配置
+
+### Launch 调用（rewrite_tf_static_frame_id）
+
+```bash
+ros2 launch ros2_bag_utils rewrite_tf_static_frame_id.launch.py \
+  config_file:=/path/to/config.yaml \
+  input_bag:=/override/input/bag \
+  frame_map:="old:=new;foo:=bar"
+```
+
+### 行为规范（rewrite_tf_static_frame_id）
+
+* 仅对 `/tf_static` topic 进行处理，其余 topic 原样拷贝。
+* 同时改写 `TransformStamped` 的 `header.frame_id`（parent）与 `child_frame_id`。
+* 当旧 frame 在 bag 中未出现时给出警告但不会中断，仍会输出新 bag。
+* 改写成功后输出改写统计，包括映射列表及修改前后的 tf 连线摘要。
 
 ## rename_topic
 

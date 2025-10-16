@@ -1,0 +1,6 @@
+# Example configuration for ros2_bag_utils rewrite_tf_static_frame_id tool
+input_bag: /path/to/original_bag
+# output_bag: /path/to/output_bag  # Optional; auto-suffixed directory when omitted
+frames:
+  old_frame_a: new_frame_a
+  old_frame_b: new_frame_b

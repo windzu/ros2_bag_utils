@@ -13,6 +13,7 @@ setup(
             'share/' + package_name + '/config',
             [
                 'config/rewrite_frame_id.example.yaml',
+                'config/rewrite_tf_static_frame_id.example.yaml',
                 'config/rename_topic.example.yaml',
                 'config/write_tf_static.example.yaml',
                 'config/filter_pointcloud_xyzi.example.yaml',
@@ -22,6 +23,7 @@ setup(
             'share/' + package_name + '/launch',
             [
                 'launch/rewrite_frame_id.launch.py',
+                'launch/rewrite_tf_static_frame_id.launch.py',
                 'launch/rename_topic.launch.py',
                 'launch/write_tf_static.launch.py',
                 'launch/filter_pointcloud_xyzi.launch.py',
@@ -38,6 +40,7 @@ setup(
     entry_points={
         'console_scripts': [
             'rewrite_frame_id = ros2_bag_utils.rewrite_frame_id:main',
+            'rewrite_tf_static_frame_id = ros2_bag_utils.rewrite_tf_static_frame_id:main',
             'rename_topic = ros2_bag_utils.rename_topic:main',
             'write_tf_static = ros2_bag_utils.write_tf_static:main',
             'filter_pointcloud_xyzi = ros2_bag_utils.filter_pointcloud_xyzi:main',
