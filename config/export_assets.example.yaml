@@ -1,0 +1,39 @@
+# Example configuration for exporting rosbag2 data assets
+# 所有 CLI 参数均可在此覆盖，并可通过命令行再次覆盖
+
+# 必填：输入 bag 的目录
+input_bag: /path/to/rosbag2_directory
+
+# 可选：导出结果根目录，默认会在 input_bag 同级生成 *_exported 目录
+# output_root: /path/to/export_root
+
+# 可选：用于 tf_static 外参对齐的基准坐标系，默认 base_link
+base_frame: base_link
+
+# 点云设置（可选）
+lidar:
+  # 指定需要导出的 PointCloud2 topic 列表；留空则自动发现所有 PointCloud2 topic
+  topics:
+    - /sensing/lidar/front/points_raw
+  # 可选：点云输出子目录，默认 lidar
+  output_subdir: lidar
+
+# 相机设置（可选）
+camera:
+  # 指定需要导出的图像 topic；留空自动发现 Image/CompressedImage
+  topics:
+    - /sensing/camera/front/image_raw
+  # 可选：图像输出子目录，默认 camera
+  output_subdir: camera
+
+# tf_static 外参导出设置
+tf_static:
+  enabled: true
+  # 外参输出子目录，默认 calib
+  output_subdir: calib
+
+# 可选：文件名中的时间戳格式，默认 %Y%m%dT%H%M%S_%f
+filename_time_format: "%Y%m%dT%H%M%S_%f"
+
+# 可选：为 true 时若输出目录存在会被删除后重建
+# overwrite: false

@@ -9,6 +9,7 @@
 * **rename_topic**：根据配置，将已录制 rosbag2 中的 topic 名称进行重命名，并生成新的 bag。
 * **write_tf_static**：根据外参配置文件，向 rosbag2 中写入 tf_static 变换信息。
 * **filter_pointcloud_xyzi**：将指定 PointCloud2 topic 的点云字段裁剪为常见的 `x/y/z/intensity` 四个字段。
+* **export_assets**：解析 rosbag2 中的点云、图像、/tf_static，并导出为 PCD/PNG/YAML 等通用格式。
 
 ## 安装与构建
 
@@ -245,6 +246,71 @@ ros2 launch ros2_bag_utils filter_pointcloud_xyzi.launch.py \
 * 仅当目标 topic 的所有消息同时包含 `x`、`y`、`z`、`intensity` 且类型为 `float32` 时会执行裁剪。
 * 如任意目标 topic 的任意消息缺失上述字段或字段类型不符合要求，将立即报错并终止。
 * 输出 bag 与输入 bag 使用相同的 storage/serialization 插件，并写入新的目录，目标 topic 的消息仅保留 `xyzi` 字段。
+
+## export_assets
+
+### 配置文件格式（export_assets）
+
+示例：`config/export_assets.example.yaml`
+
+```yaml
+input_bag: /path/to/rosbag2_directory
+output_root: /path/to/export_root  # 可选，缺省时自动生成 *_exported
+base_frame: base_link              # 可选，外参统一到的基准坐标系
+
+lidar:
+  topics:
+    - /sensing/lidar/front/points_raw
+  output_subdir: lidar
+
+camera:
+  topics:
+    - /sensing/camera/front/image_raw
+  output_subdir: camera
+
+tf_static:
+  enabled: true
+  output_subdir: calib
+
+filename_time_format: "%Y%m%dT%H%M%S_%f"
+overwrite: false
+```
+
+### 命令行使用（export_assets）
+
+```bash
+ros2 run ros2_bag_utils export_assets --config /path/to/config.yaml
+```
+
+常用覆盖参数：
+
+* `--input-bag`：输入 bag 目录
+* `--output-root`：导出根目录
+* `--base-frame`：外参统一到的基准 frame
+* `--lidar-topic /topic`：可重复指定点云 topic
+* `--camera-topic /topic`：可重复指定图像 topic
+* `--disable-tf-static`：跳过外参导出
+* `--overwrite`：若输出目录已存在则清空后重建
+
+### Launch 调用（export_assets）
+
+```bash
+ros2 launch ros2_bag_utils export_assets.launch.py \
+  config_file:=/path/to/config.yaml \
+  input_bag:=/path/to/bag \
+  output_root:=/path/to/export \
+  lidar_topics:="/lidar_a;/lidar_b" \
+  camera_topics:="/cam/image" \
+  overwrite:=true
+```
+
+### 行为规范（export_assets）
+
+* 自动识别 `sensor_msgs/msg/PointCloud2`、`sensor_msgs/msg/Image`、`sensor_msgs/msg/CompressedImage` 以及 `/tf_static`。
+* 点云导出为 `.pcd`，采用 PCD v0.7 `binary_compressed` 格式并保留全部字段。
+* 图像统一保存为 `.png`，原始图像根据编码解码，压缩图像先解压再保存。
+* `tf_static` 将尝试构建到 `base_frame` 的变换链，缺失时给出警告；如 bag 中不存在 `base_frame`，会报错并停止写入外参。
+* 点云、图像分别按 `frame_id` 归档到 `lidar/`、`camera/` 子目录，每帧以采样时间命名；外参写入 `calib/` 下 `frame_extrinsics.yaml` 文件。
 
 ## 测试
 
