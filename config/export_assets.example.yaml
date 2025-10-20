@@ -34,6 +34,5 @@ tf_static:
 
 # 可选：文件名中的时间戳格式，默认 %Y%m%dT%H%M%S_%f
 filename_time_format: "%Y%m%dT%H%M%S_%f"
-
 # 可选：为 true 时若输出目录存在会被删除后重建
 # overwrite: false
