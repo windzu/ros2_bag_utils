@@ -18,6 +18,8 @@ colcon build --packages-select ros2_bag_utils
 source install/setup.bash
 ```
 
+> 依赖说明：请确保环境已安装 `python-lzf`（例如 `pip install python-lzf` 或 `sudo apt install python3-lzf`），以便导出的 PCD 使用 LZF 压缩格式。
+
 ## rewrite_frame_id
 
 ### 配置文件格式（rewrite_frame_id）
@@ -257,6 +259,9 @@ ros2 launch ros2_bag_utils filter_pointcloud_xyzi.launch.py \
 input_bag: /path/to/rosbag2_directory
 output_root: /path/to/export_root  # 可选，缺省时自动生成 *_exported
 base_frame: base_link              # 可选，外参统一到的基准坐标系
+filename_style: ns                  # 默认纳秒命名，可设置为 datetime
+filename_time_source: header        # 默认使用 header.stamp，可改为 bag
+# filename_time_format: "%Y%m%d_%H%M%S"  # 仅当 filename_style=datetime 时有效
 
 lidar:
   topics:
@@ -291,6 +296,8 @@ ros2 run ros2_bag_utils export_assets --config /path/to/config.yaml
 * `--camera-topic /topic`：可重复指定图像 topic
 * `--disable-tf-static`：跳过外参导出
 * `--overwrite`：若输出目录已存在则清空后重建
+* `--filename-style {ns,datetime}`：选择文件命名样式；datetime 可结合 24 小时制格式
+* `--filename-time-source {header,bag}`：选择时间来源，默认 header
 
 ### Launch 调用（export_assets）
 
@@ -307,10 +314,12 @@ ros2 launch ros2_bag_utils export_assets.launch.py \
 ### 行为规范（export_assets）
 
 * 自动识别 `sensor_msgs/msg/PointCloud2`、`sensor_msgs/msg/Image`、`sensor_msgs/msg/CompressedImage` 以及 `/tf_static`。
-* 点云导出为 `.pcd`，采用 PCD v0.7 `binary_compressed` 格式并保留全部字段。
+* 点云导出为 `.pcd`，采用 PCD v0.7 格式。输出的 PCD 存储格式可通过 `pcd_format` 配置控制（取值：`uncompressed`、`ascii` 或 `compressed`，默认 `uncompressed`）。点云字段保留由 `pointcloud_format` 控制（取值：auto/xyz/xyzi/xyzit，默认为 auto）。
 * 图像统一保存为 `.png`，原始图像根据编码解码，压缩图像先解压再保存。
 * `tf_static` 将尝试构建到 `base_frame` 的变换链，缺失时给出警告；如 bag 中不存在 `base_frame`，会报错并停止写入外参。
 * 点云、图像分别按 `frame_id` 归档到 `lidar/`、`camera/` 子目录，每帧以采样时间命名；外参写入 `calib/` 下 `frame_extrinsics.yaml` 文件。
+* 默认使用消息 `header.stamp` 的纳秒值作为文件名；可通过配置切换为 24 小时制时间字符串。
+* 处理过程中使用 `rich` 进度条展示点云与图像的处理进度；若环境缺少 `rich` 会降级为日志提示。
 
 ## 测试
 

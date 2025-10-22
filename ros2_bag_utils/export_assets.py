@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import datetime as _dt
 import io
 import logging
@@ -10,8 +11,7 @@ import math
 import shutil
 import struct
 import sys
-import zlib
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
@@ -24,6 +24,12 @@ from sensor_msgs.msg import CompressedImage, Image as RosImage, PointCloud2, Poi
 from ros2_bag_utils.common import ConfigError, ensure_logging_configured, load_yaml_config, resolve_output_uri
 
 logger = logging.getLogger(__name__)
+
+
+_LZF_MODULE = None
+
+_INTENSITY_FIELD_ALIASES: Set[str] = {'intensity', 'i'}
+_TIME_FIELD_ALIASES: Set[str] = {'time', 't', 'timestamp', 'time_stamp', 'relative_time'}
 
 
 KNOWN_LIDAR_TYPES: Set[str] = {'sensor_msgs/msg/PointCloud2'}
@@ -49,7 +55,11 @@ class ExportConfig:
 	calib_subdir: str
 	include_tf_static: bool
 	overwrite: bool
+	filename_style: str
+	filename_time_source: str
 	filename_time_format: str
+	pointcloud_format: str
+	pcd_format: str
 
 
 def _normalize_topic_list(raw: object) -> List[str]:
@@ -125,6 +135,230 @@ def _resolve_time_format(raw: Optional[object]) -> str:
 	return value
 
 
+def _resolve_filename_style(raw: Optional[object]) -> str:
+	if raw is None:
+		return 'ns'
+	style = str(raw).strip().lower()
+	if style not in {'ns', 'datetime'}:
+		raise ConfigError("filename_style 仅支持 'ns' 或 'datetime'")
+	return style
+
+
+def _resolve_time_source(raw: Optional[object]) -> str:
+	if raw is None:
+		return 'header'
+	source = str(raw).strip().lower()
+	if source not in {'header', 'bag'}:
+		raise ConfigError("filename_time_source 仅支持 'header' 或 'bag'")
+	return source
+
+
+def _resolve_pointcloud_format(raw: Optional[object]) -> str:
+	if raw is None:
+		return 'auto'
+	value = str(raw).strip().lower()
+	if value not in {'auto', 'xyz', 'xyzi', 'xyzit'}:
+		raise ConfigError("pointcloud_format 仅支持 'auto','xyz','xyzi' 或 'xyzit'")
+	return value
+
+
+def _resolve_pcd_format(raw: Optional[object]) -> str:
+	if raw is None:
+		return 'uncompressed'
+	value = str(raw).strip().lower()
+	if value not in {'uncompressed', 'ascii', 'compressed'}:
+		raise ConfigError("pcd_format 仅支持 'uncompressed','ascii' 或 'compressed'")
+	return value
+
+
+def _format_filename_token(timestamp_ns: int, *, style: str, time_format: str) -> str:
+	if style == 'ns':
+		return f'{timestamp_ns:019d}'
+	if style == 'datetime':
+		formatted = _format_timestamp(timestamp_ns, time_format)
+		return _safe_path_component(formatted)
+	raise RuntimeError(f'不支持的 filename_style: {style}')
+
+
+def _extract_header_timestamp_ns(message: object) -> Optional[int]:
+	header = getattr(message, 'header', None)
+	if header is None:
+		return None
+	stamp = getattr(header, 'stamp', None)
+	if stamp is None:
+		return None
+	sec = getattr(stamp, 'sec', None)
+	nanosec = getattr(stamp, 'nanosec', None)
+	if sec is None or nanosec is None:
+		return None
+	try:
+		sec_int = int(sec)
+		nano_int = int(nanosec)
+	except (TypeError, ValueError):
+		return None
+	total = sec_int * 1_000_000_000 + nano_int
+	return total if total > 0 else None
+
+
+def _select_timestamp_ns(
+	*,
+	config: ExportConfig,
+	header_ns: Optional[int],
+	bag_ns: int,
+	topic_name: str,
+	warning_cache: Set[str],
+) -> int:
+	if config.filename_time_source == 'header':
+		if header_ns is not None:
+			return header_ns
+		if topic_name not in warning_cache:
+			logger.warning("topic '%s' 的 header.stamp 为空，将使用 bag 时间戳", topic_name)
+			warning_cache.add(topic_name)
+		return bag_ns
+	if config.filename_time_source == 'bag':
+		return bag_ns
+	raise RuntimeError(f"未知的 filename_time_source: {config.filename_time_source}")
+
+
+def _build_unique_filename(
+	*,
+	directory: Path,
+	base_name: str,
+	extension: str,
+	counters: Dict[Tuple[str, str], int],
+) -> str:
+	key = (str(directory), base_name)
+	count = counters[key]
+	if count:
+		filename = f"{base_name}_{count}{extension}"
+	else:
+		filename = f"{base_name}{extension}"
+	counters[key] = count + 1
+	return filename
+
+
+class _NoopProgress:
+	def __enter__(self):
+		return self
+
+	def __exit__(self, exc_type, exc, exc_tb):  # noqa: D401 - context manager
+		return False
+
+	def add_task(self, *args, **kwargs):  # noqa: D401 - noop
+		return None
+
+	def advance(self, task_id, advance=1):  # noqa: D401 - noop
+		return None
+
+	def update(self, task_id, *args, **kwargs):  # noqa: D401 - noop
+		return None
+
+	def stop(self):  # noqa: D401 - noop
+		return None
+
+
+def _get_lzf_module():
+	global _LZF_MODULE
+	if _LZF_MODULE is None:
+		try:
+			_LZF_MODULE = importlib.import_module('lzf')
+		except ImportError as exc:  # pragma: no cover - 依赖外部库
+			raise RuntimeError(
+				'写出 PCD 需要 python-lzf 包，请先安装 (pip install python-lzf 或 sudo apt install python3-lzf)',
+			) from exc
+	return _LZF_MODULE
+
+
+def _compress_lzf(data: bytes) -> bytes:
+	if not data:
+		return b''
+	module = _get_lzf_module()
+	max_length = len(data) + max(32, len(data) // 8)
+	compressed = module.compress(data, max_length)
+	if compressed is None:
+		raise RuntimeError('LZF 压缩失败，返回空结果')
+	return compressed
+
+
+def _build_structured_dtype(message: PointCloud2) -> np.dtype:
+	if not message.fields:
+		raise RuntimeError('PointCloud2 消息缺少字段描述，无法导出')
+	names: List[str] = []
+	formats: List[object] = []
+	offsets: List[int] = []
+	for field in sorted(message.fields, key=lambda item: item.offset):
+		_, element_size, base_dtype = _pointfield_type_info(field.datatype)
+		# 对于 count>1 的字段，NumPy 需要形状描述
+		if field.count and field.count > 1:
+			formats.append((base_dtype, field.count))
+		else:
+			formats.append(base_dtype)
+		names.append(field.name)
+		offsets.append(field.offset)
+	return np.dtype({'names': names, 'formats': formats, 'offsets': offsets, 'itemsize': message.point_step})
+
+
+def _find_field_name(dtype: np.dtype, aliases: Set[str]) -> Optional[str]:
+	if dtype.names is None:
+		return None
+	alias_lower = {alias.lower() for alias in aliases}
+	for name in dtype.names:
+		if name.lower() in alias_lower:
+			return name
+	return None
+
+
+def _resolve_required_field(dtype: np.dtype, canonical: str) -> str:
+	if dtype.names is None:
+		raise RuntimeError('PointCloud2 dtype 缺少任何字段')
+	for name in dtype.names:
+		if name.lower() == canonical:
+			return name
+	raise RuntimeError(f"PointCloud2 消息缺少 '{canonical}' 字段，无法写出 PCD")
+
+
+def _extract_scalar_column(data: np.ndarray, field_name: str) -> np.ndarray:
+	values = data[field_name]
+	array = np.asarray(values)
+	if array.ndim == 1:
+		return array.astype(np.float32, copy=False)
+	if array.ndim == 2:
+		if array.shape[1] != 1:
+			raise RuntimeError(f"字段 '{field_name}' 的 count={array.shape[1]} 暂不支持导出")
+		return array[:, 0].astype(np.float32, copy=False)
+	raise RuntimeError(f"字段 '{field_name}' 的数据维度 {array.ndim} 暂不支持导出")
+
+
+def _create_progress():
+	try:
+		progress_module = importlib.import_module('rich.progress')
+		console_module = importlib.import_module('rich.console')
+	except ImportError:  # pragma: no cover - fallback when rich is absent
+		logger.info('rich 未安装，进度条输出将被禁用')
+		return _NoopProgress()
+
+	BarColumn = getattr(progress_module, 'BarColumn')
+	ProgressCls = getattr(progress_module, 'Progress')
+	TaskProgressColumn = getattr(progress_module, 'TaskProgressColumn')
+	TimeElapsedColumn = getattr(progress_module, 'TimeElapsedColumn')
+	TimeRemainingColumn = getattr(progress_module, 'TimeRemainingColumn')
+	ConsoleCls = getattr(console_module, 'Console')
+	console = ConsoleCls(stderr=True, force_terminal=True)
+
+	return ProgressCls(
+		"[progress.description]{task.description}",
+		BarColumn(),
+		TaskProgressColumn(),
+		TimeElapsedColumn(),
+		TimeRemainingColumn(),
+		console=console,
+		transient=False,
+		disable=False,
+		redirect_stdout=False,
+		redirect_stderr=False,
+	)
+
+
 def build_effective_config(
 	yaml_config: Dict[str, object],
 	cli_input_bag: Optional[str],
@@ -138,7 +372,11 @@ def build_effective_config(
 	cli_lidar_subdir: Optional[str],
 	cli_camera_subdir: Optional[str],
 	cli_calib_subdir: Optional[str],
+	cli_filename_style: Optional[str],
+	cli_time_source: Optional[str],
 	cli_time_format: Optional[str],
+	cli_pointcloud_format: Optional[str],
+	cli_pcd_format: Optional[str],
 ) -> ExportConfig:
 	input_bag_str = cli_input_bag or yaml_config.get('input_bag')
 	if not input_bag_str:
@@ -195,10 +433,13 @@ def build_effective_config(
 		'calib',
 	)
 
-	filename_time_format = _resolve_time_format(
-		cli_time_format
-		or yaml_config.get('filename_time_format'),
-	)
+	filename_style = _resolve_filename_style(cli_filename_style or yaml_config.get('filename_style'))
+	filename_time_source = _resolve_time_source(cli_time_source or yaml_config.get('filename_time_source'))
+	time_format_raw = cli_time_format or yaml_config.get('filename_time_format')
+	if filename_style == 'datetime':
+		filename_time_format = _resolve_time_format(time_format_raw)
+	else:
+		filename_time_format = _resolve_time_format(time_format_raw) if time_format_raw else '%Y%m%dT%H%M%S_%f'
 
 	input_bag = Path(str(input_bag_str)).expanduser().resolve()
 	if not input_bag.exists():
@@ -227,7 +468,11 @@ def build_effective_config(
 		calib_subdir=calib_subdir,
 		include_tf_static=include_tf_static,
 		overwrite=overwrite,
+		filename_style=filename_style,
+		filename_time_source=filename_time_source,
 		filename_time_format=filename_time_format,
+		pointcloud_format=_resolve_pointcloud_format(cli_pointcloud_format or (lidar_section.get('output_format') if lidar_section else yaml_config.get('pointcloud_format'))),
+		pcd_format=_resolve_pcd_format(cli_pcd_format or (lidar_section.get('output_pcd_format') if lidar_section else yaml_config.get('pcd_format'))),
 	)
 
 
@@ -267,69 +512,143 @@ def _pointfield_type_info(datatype: int) -> Tuple[str, int, np.dtype]:
 	raise RuntimeError(f'不支持的 PointField datatype: {datatype}')
 
 
-def _build_structured_dtype(fields: Sequence[PointField], point_step: int) -> np.dtype:
-	names = []
-	formats = []
-	offsets = []
-	for field in fields:
-		_, size, base_dtype = _pointfield_type_info(field.datatype)
-		if field.count <= 0:
-			raise RuntimeError(f"字段 '{field.name}' 的 count 必须为正")
-		if field.count == 1:
-			dtype = base_dtype
-		else:
-			dtype = np.dtype((base_dtype, field.count))
-		names.append(field.name)
-		formats.append(dtype)
-		offsets.append(field.offset)
-	return np.dtype({'names': names, 'formats': formats, 'offsets': offsets, 'itemsize': point_step})
-
-
-def _write_pointcloud_binary_compressed(message: PointCloud2, output_path: Path) -> None:
+def _write_pointcloud_binary_compressed(
+	message: PointCloud2,
+	output_path: Path,
+	*,
+	format_pref: Optional[str] = None,
+	pcd_format: Optional[str] = None,
+) -> None:
 	if message.is_bigendian:
 		raise RuntimeError('暂不支持 big-endian PointCloud2 数据')
 
-	num_points = message.width * message.height
+	num_points = int(message.width) * int(message.height)
+	point_step = int(message.point_step)
 
-	fields_sequence: Sequence[PointField] = list(message.fields)
-	structured_dtype = _build_structured_dtype(fields_sequence, message.point_step)
-	data_array = np.frombuffer(message.data, dtype=structured_dtype, count=num_points)
+	if num_points == 0:
+		raw_buffer = b''
+	else:
+		expected_size = point_step * num_points
+		raw_buffer = bytes(message.data)
+		if len(raw_buffer) < expected_size:
+			raise RuntimeError('PointCloud2 数据长度小于预期，无法写出 PCD')
+		raw_buffer = raw_buffer[:expected_size]
 
-	field_bytes: List[bytes] = []
-	total_uncompressed_size = 0
+	dtype = _build_structured_dtype(message)
+	structured = np.frombuffer(raw_buffer, dtype=dtype, count=num_points)
 
-	for field in fields_sequence:
-		type_char, size, base_dtype = _pointfield_type_info(field.datatype)
-		extracted = data_array[field.name]
-		array = np.asarray(extracted, dtype=base_dtype, order='C')
-		if field.count > 1:
-			array = array.reshape(num_points * field.count)
+	x_field = _resolve_required_field(dtype, 'x')
+	y_field = _resolve_required_field(dtype, 'y')
+	z_field = _resolve_required_field(dtype, 'z')
+	intensity_field = _find_field_name(dtype, _INTENSITY_FIELD_ALIASES)
+	time_field = _find_field_name(dtype, _TIME_FIELD_ALIASES)
+
+	x_values = _extract_scalar_column(structured, x_field)
+	y_values = _extract_scalar_column(structured, y_field)
+	z_values = _extract_scalar_column(structured, z_field)
+
+	if intensity_field is not None:
+		intensity_values = _extract_scalar_column(structured, intensity_field)
+	else:
+		intensity_values = np.zeros(num_points, dtype=np.float32)
+		logger.debug('PointCloud2 消息缺少 intensity 字段，输出 PCD 将以 0 填充')
+
+	if time_field is not None:
+		time_values = _extract_scalar_column(structured, time_field)
+	else:
+		time_values = None
+
+	# Determine desired output layout based on format preference
+	# format_pref: 'auto'|'xyz'|'xyzi'|'xyzit' or None -> auto
+	pref = (format_pref or 'auto').lower()
+	if pref == 'auto':
+		include_intensity = True
+		include_time = time_values is not None
+	elif pref == 'xyz':
+		include_intensity = False
+		include_time = False
+	elif pref == 'xyzi':
+		include_intensity = True
+		include_time = False
+	elif pref == 'xyzit':
+		include_intensity = True
+		include_time = True
+	else:
+		raise RuntimeError(f'未知的 pointcloud format: {format_pref}')
+
+	output_fields = [('x', '<f4'), ('y', '<f4'), ('z', '<f4')]
+	if include_intensity:
+		output_fields.append(('intensity', '<f4'))
+	if include_time:
+		output_fields.append(('time', '<f4'))
+
+	output_dtype = np.dtype(output_fields)
+	output_array = np.empty(num_points, dtype=output_dtype)
+	output_array['x'] = x_values.astype(np.float32, copy=False)
+	output_array['y'] = y_values.astype(np.float32, copy=False)
+	output_array['z'] = z_values.astype(np.float32, copy=False)
+	if include_intensity:
+		output_array['intensity'] = intensity_values.astype(np.float32, copy=False)
+	if include_time:
+		# If time_values is None but format requested time, fill with 0
+		if time_values is None:
+			output_array['time'] = np.zeros(num_points, dtype=np.float32)
 		else:
-			array = array.reshape(num_points)
-		field_bytes.append(array.tobytes(order='C'))
-		total_uncompressed_size += array.nbytes
+			output_array['time'] = time_values.astype(np.float32, copy=False)
 
-	uncompressed_data = b''.join(field_bytes)
-	compressed_data = zlib.compress(uncompressed_data)
+	raw_data = output_array.tobytes()
+
+	# Determine desired PCD container format
+	pcd_fmt = (pcd_format or 'uncompressed').lower()
+
+	# Build header fields from actual output_fields to ensure header matches payload
+	field_names = [name for name, _ in output_fields]
+	field_count = len(field_names)
+	offsets_line = ' '.join(str(index * 4) for index in range(field_count))
 
 	headers = [
 		'# .PCD v0.7 - Point Cloud Data file format',
 		'VERSION 0.7',
-		'FIELDS ' + ' '.join(field.name for field in message.fields),
-		'SIZE ' + ' '.join(str(_pointfield_type_info(field.datatype)[1]) for field in message.fields),
-		'TYPE ' + ' '.join(_pointfield_type_info(field.datatype)[0] for field in message.fields),
-		'COUNT ' + ' '.join(str(field.count) for field in message.fields),
+		'FIELDS ' + ' '.join(field_names),
+		'SIZE ' + ' '.join('4' for _ in field_names),
+		'TYPE ' + ' '.join('F' for _ in field_names),
+		'COUNT ' + ' '.join('1' for _ in field_names),
+		'OFFSET ' + offsets_line,
 		f'WIDTH {message.width}',
 		f'HEIGHT {message.height}',
 		'VIEWPOINT 0 0 0 1 0 0 0',
 		f'POINTS {num_points}',
-		'DATA binary_compressed',
 	]
-	headers_blob = ('\n'.join(headers) + '\n').encode('ascii')
-	body = struct.pack('<II', len(compressed_data), total_uncompressed_size) + compressed_data
 
 	output_path.parent.mkdir(parents=True, exist_ok=True)
-	output_path.write_bytes(headers_blob + body)
+
+	if pcd_fmt == 'ascii':
+		headers.append('DATA ascii')
+		headers_blob = ('\n'.join(headers) + '\n').encode('ascii')
+		with output_path.open('wb') as fh:
+			fh.write(headers_blob)
+			for point in output_array:
+				line = ' '.join(str(float(point[name])) for name in field_names) + '\n'
+				fh.write(line.encode('ascii'))
+		return
+
+	if pcd_fmt == 'uncompressed':
+		headers.append('DATA binary')
+		headers_blob = ('\n'.join(headers) + '\n').encode('ascii')
+		body = raw_data
+		output_path.write_bytes(headers_blob + body)
+		return
+
+	if pcd_fmt == 'compressed':
+		headers.append('DATA binary_compressed')
+		headers_blob = ('\n'.join(headers) + '\n').encode('ascii')
+		uncompressed_size = len(raw_data)
+		compressed_data = _compress_lzf(raw_data)
+		body = struct.pack('<II', len(compressed_data), uncompressed_size) + compressed_data
+		output_path.write_bytes(headers_blob + body)
+		return
+
+	raise RuntimeError(f'未知的 pcd_format: {pcd_format}')
 
 
 def _image_message_to_numpy(msg: RosImage) -> Tuple[np.ndarray, str]:
@@ -612,91 +931,147 @@ def export_bag_assets(config: ExportConfig) -> None:
 	if config.include_tf_static and not tf_static_present:
 		logger.warning('bag 中没有 /tf_static，无法导出外参')
 
-	converter_options = rosbag2_py.ConverterOptions('', '')
-	storage_options = rosbag2_py.StorageOptions(uri=str(config.input_bag), storage_id=storage_id)
-	reader = rosbag2_py.SequentialReader()
-	reader.open(storage_options, converter_options)
+	message_counts = {topic.topic_metadata.name: topic.message_count for topic in topics_info}
+	lidar_total = sum(message_counts.get(name, 0) for name in lidar_topics)
+	camera_total = sum(message_counts.get(name, 0) for name in camera_topics)
+
+	progress = _create_progress()
+	filename_counters: Dict[Tuple[str, str], int] = defaultdict(int)
+	missing_header_topics: Set[str] = set()
 
 	type_cache: Dict[str, object] = {}
 	frame_lookup: Dict[str, str] = {}
 	lidar_count = 0
 	camera_count = 0
-
 	static_transforms: Dict[str, _StaticTransform] = {}
 
-	while reader.has_next():
-		topic_name, serialized, timestamp = reader.read_next()
-		if topic_name in lidar_topics:
-			topic_type = lidar_topics[topic_name]
-			if topic_type not in type_cache:
-				type_cache[topic_type] = get_message(topic_type)
-			msg_type = type_cache[topic_type]
-			message = deserialize_message(serialized, msg_type)
-			if not isinstance(message, PointCloud2):
-				raise RuntimeError(f"topic '{topic_name}' 的消息类型不是 PointCloud2")
-			frame_id = _sanitize_frame_id(message.header.frame_id)
-			if not frame_id:
-				logger.warning("topic '%s' 的 PointCloud2 消息缺少 frame_id，已跳过", topic_name)
-				continue
-			frame_lookup.setdefault(frame_id, frame_id)
-			file_dir = config.output_root / config.lidar_subdir / _safe_path_component(frame_id)
-			file_name = f"{_format_timestamp(timestamp, config.filename_time_format)}.pcd"
-			_write_pointcloud_binary_compressed(message, file_dir / file_name)
-			lidar_count += 1
-		elif topic_name in camera_topics:
-			topic_type = camera_topics[topic_name]
-			if topic_type not in type_cache:
-				type_cache[topic_type] = get_message(topic_type)
-			msg_type = type_cache[topic_type]
-			message = deserialize_message(serialized, msg_type)
-			if topic_type == 'sensor_msgs/msg/Image':
-				if not isinstance(message, RosImage):
-					raise RuntimeError(f"topic '{topic_name}' 的消息类型不是 Image")
-				image = _ros_image_to_pil(message)
+	converter_options = rosbag2_py.ConverterOptions('', '')
+	storage_options = rosbag2_py.StorageOptions(uri=str(config.input_bag), storage_id=storage_id)
+	reader = rosbag2_py.SequentialReader()
+	reader.open(storage_options, converter_options)
+
+	with progress:
+		lidar_task = progress.add_task('点云', total=lidar_total or None) if getattr(progress, 'add_task', None) else None
+		camera_task = progress.add_task('图像', total=camera_total or None) if getattr(progress, 'add_task', None) else None
+
+		while reader.has_next():
+			topic_name, serialized, timestamp = reader.read_next()
+			if topic_name in lidar_topics:
+				topic_type = lidar_topics[topic_name]
+				if topic_type not in type_cache:
+					type_cache[topic_type] = get_message(topic_type)
+				msg_type = type_cache[topic_type]
+				message = deserialize_message(serialized, msg_type)
+				if not isinstance(message, PointCloud2):
+					raise RuntimeError(f"topic '{topic_name}' 的消息类型不是 PointCloud2")
+				if lidar_task is not None:
+					progress.advance(lidar_task, 1)
 				frame_id = _sanitize_frame_id(message.header.frame_id)
-			elif topic_type == 'sensor_msgs/msg/CompressedImage':
-				if not isinstance(message, CompressedImage):
-					raise RuntimeError(f"topic '{topic_name}' 的消息类型不是 CompressedImage")
-				image = _compressed_image_to_pil(message)
-				frame_id = _sanitize_frame_id(message.header.frame_id)
-			else:
-				raise RuntimeError(f'未知的相机消息类型: {topic_type}')
-			if not frame_id:
-				logger.warning("topic '%s' 的图像消息缺少 frame_id，已跳过", topic_name)
-				continue
-			frame_lookup.setdefault(frame_id, frame_id)
-			file_dir = config.output_root / config.camera_subdir / _safe_path_component(frame_id)
-			file_name = f"{_format_timestamp(timestamp, config.filename_time_format)}.png"
-			file_dir.mkdir(parents=True, exist_ok=True)
-			image.save(file_dir / file_name, format='PNG')
-			camera_count += 1
-		elif config.include_tf_static and topic_name == TF_STATIC_TOPIC:
-			if TF_STATIC_TYPE not in type_cache:
-				type_cache[TF_STATIC_TYPE] = get_message(TF_STATIC_TYPE)
-			message = deserialize_message(serialized, type_cache[TF_STATIC_TYPE])
-			for transform in message.transforms:
-				parent = _normalize_tf_frame(transform.header.frame_id)
-				child = _normalize_tf_frame(transform.child_frame_id)
-				translation = np.array(
-					[
-						transform.transform.translation.x,
-						transform.transform.translation.y,
-						transform.transform.translation.z,
-					],
-					dtype=np.float64,
-				)
-				quaternion = np.array(
-					[
-						transform.transform.rotation.x,
-						transform.transform.rotation.y,
-						transform.transform.rotation.z,
-						transform.transform.rotation.w,
-					],
-					dtype=np.float64,
-				)
-				if not child:
+				if not frame_id:
+					logger.warning("topic '%s' 的 PointCloud2 消息缺少 frame_id，已跳过", topic_name)
 					continue
-				static_transforms[child] = _StaticTransform(parent=parent, child=child, translation=translation, quaternion=quaternion)
+				header_ns = _extract_header_timestamp_ns(message)
+				effective_ns = _select_timestamp_ns(
+					config=config,
+					header_ns=header_ns,
+					bag_ns=timestamp,
+					topic_name=topic_name,
+					warning_cache=missing_header_topics,
+				)
+				token = _format_filename_token(
+					effective_ns,
+					style=config.filename_style,
+					time_format=config.filename_time_format,
+				)
+				frame_lookup.setdefault(frame_id, frame_id)
+				file_dir = config.output_root / config.lidar_subdir / _safe_path_component(frame_id)
+				file_name = _build_unique_filename(
+					directory=file_dir,
+					base_name=token,
+					extension='.pcd',
+					counters=filename_counters,
+				)
+				_write_pointcloud_binary_compressed(
+					message,
+					file_dir / file_name,
+					format_pref=config.pointcloud_format,
+					pcd_format=config.pcd_format,
+				)
+				lidar_count += 1
+			elif topic_name in camera_topics:
+				topic_type = camera_topics[topic_name]
+				if topic_type not in type_cache:
+					type_cache[topic_type] = get_message(topic_type)
+				msg_type = type_cache[topic_type]
+				message = deserialize_message(serialized, msg_type)
+				if camera_task is not None:
+					progress.advance(camera_task, 1)
+				if topic_type == 'sensor_msgs/msg/Image':
+					if not isinstance(message, RosImage):
+						raise RuntimeError(f"topic '{topic_name}' 的消息类型不是 Image")
+					image = _ros_image_to_pil(message)
+					frame_id = _sanitize_frame_id(message.header.frame_id)
+				elif topic_type == 'sensor_msgs/msg/CompressedImage':
+					if not isinstance(message, CompressedImage):
+						raise RuntimeError(f"topic '{topic_name}' 的消息类型不是 CompressedImage")
+					image = _compressed_image_to_pil(message)
+					frame_id = _sanitize_frame_id(message.header.frame_id)
+				else:
+					raise RuntimeError(f'未知的相机消息类型: {topic_type}')
+				if not frame_id:
+					logger.warning("topic '%s' 的图像消息缺少 frame_id，已跳过", topic_name)
+					continue
+				header_ns = _extract_header_timestamp_ns(message)
+				effective_ns = _select_timestamp_ns(
+					config=config,
+					header_ns=header_ns,
+					bag_ns=timestamp,
+					topic_name=topic_name,
+					warning_cache=missing_header_topics,
+				)
+				token = _format_filename_token(
+					effective_ns,
+					style=config.filename_style,
+					time_format=config.filename_time_format,
+				)
+				frame_lookup.setdefault(frame_id, frame_id)
+				file_dir = config.output_root / config.camera_subdir / _safe_path_component(frame_id)
+				file_name = _build_unique_filename(
+					directory=file_dir,
+					base_name=token,
+					extension='.png',
+					counters=filename_counters,
+				)
+				file_dir.mkdir(parents=True, exist_ok=True)
+				image.save(file_dir / file_name, format='PNG')
+				camera_count += 1
+			elif config.include_tf_static and topic_name == TF_STATIC_TOPIC:
+				if TF_STATIC_TYPE not in type_cache:
+					type_cache[TF_STATIC_TYPE] = get_message(TF_STATIC_TYPE)
+				message = deserialize_message(serialized, type_cache[TF_STATIC_TYPE])
+				for transform in message.transforms:
+					parent = _normalize_tf_frame(transform.header.frame_id)
+					child = _normalize_tf_frame(transform.child_frame_id)
+					translation = np.array(
+						[
+							transform.transform.translation.x,
+							transform.transform.translation.y,
+							transform.transform.translation.z,
+						],
+						dtype=np.float64,
+					)
+					quaternion = np.array(
+						[
+							transform.transform.rotation.x,
+							transform.transform.rotation.y,
+							transform.transform.rotation.z,
+							transform.transform.rotation.w,
+						],
+						dtype=np.float64,
+					)
+					if not child:
+						continue
+					static_transforms[child] = _StaticTransform(parent=parent, child=child, translation=translation, quaternion=quaternion)
 
 	logger.info('导出完成: 点云 %d 帧, 图像 %d 帧', lidar_count, camera_count)
 
@@ -717,7 +1092,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 	parser.add_argument('--lidar-subdir', type=str, help='点云输出子目录，默认 lidar')
 	parser.add_argument('--camera-subdir', type=str, help='图像输出子目录，默认 camera')
 	parser.add_argument('--calib-subdir', type=str, help='外参输出子目录，默认 calib')
-	parser.add_argument('--filename-time-format', type=str, help='输出文件名中的时间格式，默认 %Y%m%dT%H%M%S_%f')
+	parser.add_argument('--filename-style', type=str, choices=['ns', 'datetime'], help='文件名时间格式，ns 为纳秒整数，datetime 使用 strftime 格式')
+	parser.add_argument('--filename-time-source', type=str, choices=['header', 'bag'], help='文件名时间来源，header 或 bag')
+	parser.add_argument('--filename-time-format', type=str, help='当文件名样式为 datetime 时使用的 strftime 格式，默认 %Y%m%dT%H%M%S_%f')
+	parser.add_argument('--pointcloud-format', type=str, choices=['auto', 'xyz', 'xyzi', 'xyzit'], help='点云导出格式，auto/xyz/xyzi/xyzit，默认为 auto')
+	parser.add_argument('--pcd-format', type=str, choices=['uncompressed', 'ascii', 'compressed'], help='生成的 PCD 存储格式：uncompressed/ascii/compressed，默认 uncompressed')
 	parser.add_argument('--disable-tf-static', action='store_true', help='禁用 tf_static 外参导出')
 	parser.add_argument('--overwrite', action='store_true', help='如果输出目录已存在则删除重建')
 	return parser
@@ -742,7 +1121,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 			cli_lidar_subdir=args.lidar_subdir,
 			cli_camera_subdir=args.camera_subdir,
 			cli_calib_subdir=args.calib_subdir,
+			cli_filename_style=args.filename_style,
+			cli_time_source=args.filename_time_source,
 			cli_time_format=args.filename_time_format,
+			cli_pointcloud_format=args.pointcloud_format,
+			cli_pcd_format=args.pcd_format,
 		)
 		export_bag_assets(config)
 	except ConfigError as exc:

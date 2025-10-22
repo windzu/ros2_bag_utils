@@ -17,6 +17,10 @@ lidar:
     - /sensing/lidar/front/points_raw
   # 可选：点云输出子目录，默认 lidar
   output_subdir: lidar
+  # 可选：点云导出格式，支持 auto/xyz/xyzi/xyzit，默认 auto
+  # output_format: auto
+  # 可选：点云 PCD 存储格式，支持 uncompressed/ascii/compressed，默认 uncompressed
+  # output_pcd_format: uncompressed
 
 # 相机设置（可选）
 camera:
@@ -31,8 +35,13 @@ tf_static:
   enabled: true
   # 外参输出子目录，默认 calib
   output_subdir: calib
+# 文件命名相关设置
+# filename_style: ns           # 默认使用纳秒整数命名
+# filename_style: datetime     # 使用 24 小时制时间字符串命名
+# filename_time_source: header # 默认使用 header.stamp
+# filename_time_source: bag    # 可选，使用 rosbag 记录时间
+# 当 filename_style 为 datetime 时，可指定 strftime 格式（24 小时制）
+# filename_time_format: "%Y%m%d_%H%M%S"
 
-# 可选：文件名中的时间戳格式，默认 %Y%m%dT%H%M%S_%f
-filename_time_format: "%Y%m%dT%H%M%S_%f"
 # 可选：为 true 时若输出目录存在会被删除后重建
 # overwrite: false

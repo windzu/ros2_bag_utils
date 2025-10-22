@@ -32,7 +32,7 @@ setup(
             ],
         ),
     ],
-    install_requires=['setuptools', 'numpy', 'Pillow'],
+    install_requires=['setuptools', 'numpy', 'Pillow', 'rich', 'python-lzf'],
     zip_safe=True,
     maintainer='Windzu',
     maintainer_email='windzu@example.com',
