@@ -17,6 +17,7 @@ setup(
                 'config/rename_topic.example.yaml',
                 'config/write_tf_static.example.yaml',
                 'config/filter_pointcloud_xyzi.example.yaml',
+                'config/export_assets.example.yaml',
             ],
         ),
         (
@@ -27,10 +28,11 @@ setup(
                 'launch/rename_topic.launch.py',
                 'launch/write_tf_static.launch.py',
                 'launch/filter_pointcloud_xyzi.launch.py',
+                'launch/export_assets.launch.py',
             ],
         ),
     ],
-    install_requires=['setuptools', 'numpy'],
+    install_requires=['setuptools', 'numpy', 'Pillow', 'rich', 'python-lzf'],
     zip_safe=True,
     maintainer='Windzu',
     maintainer_email='windzu@example.com',
@@ -44,6 +46,7 @@ setup(
             'rename_topic = ros2_bag_utils.rename_topic:main',
             'write_tf_static = ros2_bag_utils.write_tf_static:main',
             'filter_pointcloud_xyzi = ros2_bag_utils.filter_pointcloud_xyzi:main',
+            'export_assets = ros2_bag_utils.export_assets:main',
         ],
     },
 )
