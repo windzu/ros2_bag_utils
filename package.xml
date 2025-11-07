@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package format="3">
     <name>ros2_bag_utils</name>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
     <description>Utilities for manipulating ROS 2 bag files, including frame_id rewriting.</description>
     <maintainer email="windzu1@gmail.com">Windzu</maintainer>
     <license>Apache-2.0</license>
@@ -10,7 +10,9 @@
 
     <exec_depend>launch</exec_depend>
     <exec_depend>launch_ros</exec_depend>
-    <exec_depend>pyyaml</exec_depend>
+
+    <exec_depend>python3-yaml</exec_depend>
+
     <exec_depend>rclpy</exec_depend>
     <exec_depend>rosbag2_py</exec_depend>
     <exec_depend>rosidl_runtime_py</exec_depend>
@@ -19,7 +21,6 @@
     <exec_depend>python3-pil</exec_depend>
     <exec_depend>python3-rich</exec_depend>
     <exec_depend>python3-lzf</exec_depend>
-
     <test_depend>ament_pytest</test_depend>
 
     <export>
