@@ -9,7 +9,8 @@
 * **rename_topic**：根据配置，将已录制 rosbag2 中的 topic 名称进行重命名，并生成新的 bag。
 * **write_tf_static**：根据外参配置文件，向 rosbag2 中写入 tf_static 变换信息。
 * **filter_pointcloud_xyzi**：将指定 PointCloud2 topic 的点云字段裁剪为常见的 `x/y/z/intensity` 四个字段。
-* **export_assets**：解析 rosbag2 中的点云、图像、/tf_static，并导出为 PCD/PNG/YAML 等通用格式。
+* **export_assets**：解析 rosbag2 中的点云、图像、/tf_static，并导出为 PCD/PNG/YAML 等通用格式
+* **fuse_pointclouds**: 将多个激光雷达 PCD 点云融合到统一坐标系。
 
 ## 安装与构建
 
@@ -19,6 +20,61 @@ source install/setup.bash
 ```
 
 > 依赖说明：请确保环境已安装 `python-lzf`（例如 `pip install python-lzf` 或 `sudo apt install python3-lzf`），以便导出的 PCD 使用 LZF 压缩格式。
+
+## fuse_pointclouds
+
+### 配置文件格式（fuse_pointclouds）
+
+示例：`config/fuse_pointclouds.example.yaml`
+
+```yaml
+input_root: /path/to/exported/data
+base_frame: base_link
+reference_lidar: lidar_name
+time_tolerance_ms: 10.0
+lidar_subdir: lidar
+calib_subdir: calib
+overwrite: false
+```
+
+* `input_root`: 包含点云和外参的根目录。
+* `base_frame`: 目标基准坐标系。
+* `reference_lidar`: 参考时间轴的激光雷达名称。
+* `time_tolerance_ms`: 时间匹配容差（毫秒）。
+* `lidar_subdir`: 点云子目录（默认 `lidar`）。
+* `calib_subdir`: 外参子目录（默认 `calib`）。
+* `overwrite`: 是否覆盖现有输出目录。
+
+### 命令行使用（fuse_pointclouds）
+
+```bash
+ros2 run ros2_bag_utils fuse_pointclouds --config /path/to/config.yaml
+```
+
+命令行参数可覆盖配置文件：
+
+* `--input-root`：输入根目录
+* `--base-frame`：基准坐标系
+* `--reference-lidar`：参考激光雷达名称
+* `--time-tolerance-ms`：时间容差（毫秒）
+* `--lidar-subdir`：点云子目录
+* `--calib-subdir`：外参子目录
+* `--overwrite`：覆盖输出目录
+
+### Launch 调用（fuse_pointclouds）
+
+```bash
+ros2 launch ros2_bag_utils fuse_pointclouds.launch.py \
+  config_file:=/path/to/config.yaml
+```
+
+### 行为规范（fuse_pointclouds）
+
+* 读取指定目录下的 PCD 文件，根据时间戳匹配多个激光雷达的点云。
+* 使用外参文件中的四元数和平移，将点云变换到统一坐标系。
+* 输出融合后的点云到 `input_root/lidar/base_frame/` 目录。
+* 支持 ASCII、二进制和压缩 PCD 格式。
+* 依赖 wind-pypcd、scipy、numpy、PyYAML。
 
 ## rewrite_frame_id
 

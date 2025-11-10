@@ -1,0 +1,8 @@
+# 点云融合示例配置
+input_root: data/path_to_your_bag_data
+base_frame: base_link # 所有点云将被转换到该坐标系下
+reference_lidar: reference_lidar_name_here # 以该激光雷达的时间戳为参考进行融合
+time_tolerance_ms: 5.0 # 时间容差，单位毫秒
+lidar_subdir: lidar # 激光雷达点云数据
+calib_subdir: calib # lidar外参
+overwrite: false # 是否覆盖已有融合点云文件
