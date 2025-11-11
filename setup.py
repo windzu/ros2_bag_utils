@@ -18,6 +18,7 @@ setup(
                 "config/write_tf_static.example.yaml",
                 "config/filter_pointcloud_xyzi.example.yaml",
                 "config/export_assets.example.yaml",
+                "config/fuse_pointclouds.example.yaml",
             ],
         ),
         (
@@ -29,6 +30,7 @@ setup(
                 "launch/write_tf_static.launch.py",
                 "launch/filter_pointcloud_xyzi.launch.py",
                 "launch/export_assets.launch.py",
+                "launch/fuse_pointclouds.launch.py",
             ],
         ),
     ],
@@ -54,6 +56,7 @@ setup(
             "write_tf_static = ros2_bag_utils.write_tf_static:main",
             "filter_pointcloud_xyzi = ros2_bag_utils.filter_pointcloud_xyzi:main",
             "export_assets = ros2_bag_utils.export_assets:main",
+            "fuse_pointclouds = ros2_bag_utils.fuse_pointclouds:main",
         ],
     },
 )
